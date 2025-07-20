@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CodeDeploy resources for target account (without EC2 instance)
+
+Parameters:
+  AppName:
+    Type: String
+    Default: infra
+    Description: Name of the application (lowercase)
+  Environment:
+    Type: String
+    Default: prod
+    Description: Environment name
+  CentralAccountId:
+    Type: String
+    Default: 459573696753
+    Description: AWS Account ID of the central account
+  ArtifactBucketName:
+    Type: String
+    Default: cross-account-cicd-artifacts-bucket
+    Description: Name of the artifact bucket in the central account
+  KMSKeyArn:
+    Type: String
+    Default: arn:aws:kms:eu-west-1:459573696753:key/9a49e2c2-4864-4607-9648-5a34a110d65b
+    Description: ARN of the KMS key used to encrypt the artifact bucket
+  ExistingInstanceId:
+    Type: String
+    Description: ID of your existing EC2 instance (e.g., i-0123456789abcdef0)
+    NoEcho: true
+
+Resources:
+  # EC2 Instance Role
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-${Environment}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  # EC2 Instance Profile
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${AppName}-${Environment}-ec2-profile
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # CodeDeploy Agent Policy
+  CodeDeployAgentPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${AppName}-${Environment}-codedeploy-agent-policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - codedeploy:*
+            Resource: "*"
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # S3 Artifacts Access Policy
+  S3ArtifactsAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${AppName}-${Environment}-s3-artifacts-access
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${ArtifactBucketName}
+              - !Sub arn:aws:s3:::${ArtifactBucketName}/*
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !Ref KMSKeyArn
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # CodeDeploy Role
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-${Environment}-codedeploy-service-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  # CodeDeploy Application
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub ${AppName}-${Environment}-application
+      ComputePlatform: Server
+
+  # CodeDeploy Deployment Group
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub ${AppName}-${Environment}-deployment-group
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      DeploymentConfigName: CodeDeployDefault.OneAtATime
+      Ec2InstanceIds:
+        - !Ref ExistingInstanceId
+
+Outputs:
+  CodeDeployApplicationName:
+    Description: Name of the CodeDeploy application
+    Value: !Ref CodeDeployApplication
+    Export:
+      Name: !Sub ${AppName}-${Environment}-CodeDeployApplicationName
+
+  CodeDeployDeploymentGroupName:
+    Description: Name of the CodeDeploy deployment group
+    Value: !Ref CodeDeployDeploymentGroup
+    Export:
+      Name: !Sub ${AppName}-${Environment}-CodeDeployDeploymentGroupName

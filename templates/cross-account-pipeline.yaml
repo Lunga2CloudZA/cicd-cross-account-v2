@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Pipeline for cross-account deployment
+
+Conditions:
+  UsePersonalAccount: !Equals [!Ref GitHubOwnerType, "personal"]
+
+Parameters:
+  GitHubOwnerType:
+    Type: String
+    Default: personal
+    AllowedValues:
+      - personal
+      - organization
+    Description: Type of GitHub account (personal or organization)
+  
+  GitHubOwner:
+    Type: String
+    Default: mpephethwa
+    Description: GitHub repository owner (personal account)
+  
+  GitHubOrgOwner:
+    Type: String
+    Default: Lunga2CloudZA
+    Description: GitHub repository owner (organization account)
+    
+  GitHubRepo:
+    Type: String
+    Default: cicd-cross-account
+    Description: GitHub repository name
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub branch
+  CrossAccountRoleArn:
+    Type: String
+    Description: Cross-account role ARN from target account
+  TargetAccountId:
+    Type: String
+    Default: 767397841020
+    Description: Target AWS account ID
+
+Resources:
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: cross-account-pipeline
+      RoleArn: !ImportValue infra-shared-services-PipelineServiceRoleArn
+      ArtifactStore:
+        Type: S3
+        Location: cross-account-cicd-artifacts-bucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !ImportValue infra-shared-services-GitHubConnectionArn
+                FullRepositoryId: !If 
+                  - UsePersonalAccount
+                  - !Sub ${GitHubOwner}/${GitHubRepo}
+                  - !Sub ${GitHubOrgOwner}/${GitHubRepo}
+                BranchName: !Ref GitHubBranch
+              OutputArtifacts:
+                - Name: SourceCode
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: '1'
+              Configuration:
+                ApplicationName: infra-prod-application
+                DeploymentGroupName: infra-prod-deployment-group
+              InputArtifacts:
+                - Name: SourceCode
+              RoleArn: !Ref CrossAccountRoleArn
+              Region: eu-west-1
+
+Outputs:
+  PipelineUrl:
+    Description: URL to the pipeline console
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}

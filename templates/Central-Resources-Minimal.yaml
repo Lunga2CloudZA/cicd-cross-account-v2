@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Central resources for cross-account pipeline (minimal version)
+
+Parameters:
+  AppName:
+    Type: String
+    Default: infra
+    Description: Name of the application (lowercase). Use infra for platform.
+  Environment:
+    Type: String
+    Default: shared-services
+    Description: An environment name that is prefixed to resource names
+    AllowedValues:
+    - dev
+    - test
+    - prod
+    - shared-services
+  ExistingBucketName:
+    Type: String
+    Default: cross-account-cicd-artifacts-bucket
+    Description: Name of the existing S3 bucket for artifacts
+
+Resources:
+  ArtifactKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for encrypting artifacts
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join ['', ['arn:aws:iam::', !Ref 'AWS::AccountId', ':root']]
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow use of the key for CodePipeline
+            Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+
+  ArtifactKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Join ['', ['alias/', !Ref AppName, '-', !Ref Environment, '-artifacts-key']]
+      TargetKeyId: !Ref ArtifactKey
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref AppName, !Ref Environment, 'Pipeline', 'ServiceRole']]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeStarFullAccess
+
+  CodePipelineServicePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Join ['-', [!Ref AppName, !Ref Environment, 'Pipeline', 'ServicePolicy']]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:GetBucketVersioning
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !Join ['', ['arn:aws:s3:::', !Ref ExistingBucketName]]
+              - !Join ['', ['arn:aws:s3:::', !Ref ExistingBucketName, '/*']]
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: !GetAtt ArtifactKey.Arn
+          - Effect: Allow
+            Action:
+              - cloudformation:*
+              - iam:PassRole
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - codestar-connections:UseConnection
+            Resource: '*'
+      Roles:
+        - !Ref CodePipelineServiceRole
+
+  # GitHub connection for CodePipeline
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: "infra-github-connection"
+      ProviderType: GitHub
+
+Outputs:
+  ArtifactBucket:
+    Description: S3 bucket for pipeline artifacts
+    Value: !Ref ExistingBucketName
+    Export:
+      Name: !Join ['-', [!Ref AppName, !Ref Environment, 'ArtifactBucket']]
+  
+  ArtifactKeyArn:
+    Description: KMS key ARN for artifact encryption
+    Value: !GetAtt ArtifactKey.Arn
+    Export:
+      Name: !Join ['-', [!Ref AppName, !Ref Environment, 'ArtifactKeyArn']]
+  
+  CodePipelineServiceRoleArn:
+    Description: Service role ARN for CodePipeline
+    Value: !GetAtt CodePipelineServiceRole.Arn
+    Export:
+      Name: !Join ['-', [!Ref AppName, !Ref Environment, 'PipelineServiceRoleArn']]
+  
+  GitHubConnectionArn:
+    Description: GitHub connection ARN
+    Value: !Ref GitHubConnection
+    Export:
+      Name: !Join ['-', [!Ref AppName, !Ref Environment, 'GitHubConnectionArn']]

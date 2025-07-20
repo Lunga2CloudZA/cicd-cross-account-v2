@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: IAM policies and roles for used with pipelines
+# These IAM resources are deployed to the accounts that are a target
+# for CloudFormation templates. They allow CloudFormation to run and
+# gather data from the central S3 bucket.
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: "Standard Details"
+      Parameters:
+        - AppName
+        - Environment
+    - Label:
+        default: "Shared-Services Details"
+      Parameters:
+        - ArtifactBucket
+        - AccountID
+        - KMSARN
+
+Parameters:
+  AppName:
+    Type: String
+    Default: infra
+    Description: Name of the application (lowercase). Use infra for platform.
+  Environment:
+    Type: String
+    Default: prod
+    Description: An environment name that is prefixed to resource names
+    AllowedValues:
+    - dev
+    - test
+    - prod
+    - shared-services
+
+  ArtifactBucket:
+    Type: String
+    Default: cross-account-cicd-artifacts-bucket
+    Description: Name of the artifact bucket
+  AccountID:
+    Type: String
+    Default: 459573696753
+    Description: Account ID of Shared Services
+  KMSARN:
+    Type: String
+    Description: ARN of the Artifact Bucket KMS key
+
+Resources:
+  CrossAccountRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        'Fn::Join': [ "-", [!Ref AppName, !Ref Environment, "Pipeline", "CrossAccountRole"]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              AWS: !Join
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref AccountID
+                  - ':root'
+            Action:
+              - "sts:AssumeRole"
+
+  CrossAccountPipePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName:
+        'Fn::Join': [ "-", [!Ref AppName, !Ref Environment, "Pipeline", "Policy"]]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "cloudformation:*"
+              - "iam:PassRole"
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - "s3:Get*"
+              - "s3:Put*"
+              - "s3:ListBucket"
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref ArtifactBucket
+                - /*
+      Roles:
+        -  !Ref CrossAccountRole
+
+  KMSAccessPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName:
+        'Fn::Join': [ "-", [!Ref AppName, !Ref Environment, "KMS", "Policy"]]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "kms:DescribeKey"
+              - "kms:GenerateDataKey*"
+              - "kms:Encrypt"
+              - "kms:ReEncrypt*"
+              - "kms:Decrypt"
+            Resource: !Ref KMSARN
+      Roles:
+        -  !Ref CrossAccountRole
+
+  CloudFormationRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        'Fn::Join': [ "-", [!Ref AppName, !Ref Environment, "Cfn", "Role"]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: "Allow"
+          Principal:
+            Service: "cloudformation.amazonaws.com"
+          Action: "sts:AssumeRole"
+
+  CloudFormationPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName:
+        'Fn::Join': [ "-", [!Ref AppName, !Ref Environment, "Cfn", "Policy"]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Action:
+            - logs:*
+            - s3:*
+            - lambda:*
+            - guardduty:*
+            - kinesis:*
+            - iam:*
+            - cloudwatch:*
+            - guardduty:*
+            - events:*
+            - dynamodb:*
+            - sqs:*
+            - sns:*
+            - codebuild:*
+            - cloudfront:*
+            - cloudtrail:*
+            - rds:*
+            - kms:*
+            - ssm:*
+            - route53:*
+            - route53resolver:*
+            - ec2:*
+            - config:*
+            - waf:*
+            - autoscaling:*
+            - acm:*
+            - secretsmanager:*
+            - elasticloadbalancing:*
+            - elasticloadbalancingv2:*
+            - elb:*
+            - cognito-idp:*
+            - xray:*
+            - access-analyzer:*
+            - securityhub:*
+            - waf-regional:*
+            - backup:*
+            - backup-storage:Mount
+            - backup-storage:MountCapsule
+            - chatbot:*
+            - application-autoscaling:*
+            - elasticache:*
+            - ram:*
+          Resource:
+            - "*"
+      Roles:
+        -  !Ref CloudFormationRole
+
+Outputs:
+ CrossAccountRole:
+  Description: Cross Account Role for CodePipeline.
+  Value: !GetAtt CrossAccountRole.Arn
+  Export:
+    Name: !Join ['-', [!Ref AppName, !Ref Environment, 'CrossAccountRole', 'Arn']]
+ CloudFormationRole:
+  Description: CloudFormation Role for CodePipeline.
+  Value: !GetAtt CloudFormationRole.Arn
+  Export:
+    Name: !Join ['-', [!Ref AppName, !Ref Environment, 'CfnRole', 'Arn']]
